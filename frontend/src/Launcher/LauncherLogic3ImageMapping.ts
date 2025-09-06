@@ -1,19 +1,30 @@
 // File: src/Launcher/LauncherLogic3ImageMapping.ts
-// Rumah 3: Image Mapping. Sinkronkan natural size dari ctx → bus.
-// Simpel: kalau ctx.natural ada, tulis ke bus.image.natural.
+// Rumah-3: Image Mapping. Pastikan bus.image selalu ada dan `localSpace` literal.
 
 import type { Bus, FrameCtx } from "./LauncherHubTypes";
 
-export function logic3ImageMapping(prev: Bus | undefined, ctx: FrameCtx): Bus {
-  const next: Bus = { ...(prev ?? {}) };
-  if (!next.image) next.image = { src: "" };
+export function logic3ImageMapping(bus: Bus | undefined, ctx: FrameCtx): Bus {
+  const next: Bus = bus ? { ...bus } : ({} as Bus);
 
-  if (ctx.natural) {
-    // Natural size diisi saat <img onLoad>; ctx.natural dibawa Hub per-layer.
-    next.image = { ...next.image, natural: ctx.natural };
-  } else {
-    // Belum ada natural size, biarkan undefined (pipeline tetap jalan).
-    next.image = { ...next.image, natural: next.image.natural };
+  // Pastikan image block ada
+  if (!next.image) {
+    next.image = { natural: { w: 0, h: 0 }, localSpace: "image-centered" };
   }
+
+  // Update natural dari ctx jika tersedia
+  if (ctx.natural && ctx.natural.w > 0 && ctx.natural.h > 0) {
+    next.image = {
+      natural: { w: ctx.natural.w, h: ctx.natural.h },
+      localSpace: "image-centered",
+    };
+  } else {
+    // tetap set literal type
+    next.image = {
+      natural: { w: next.image.natural?.w || 0, h: next.image.natural?.h || 0 },
+      localSpace: "image-centered",
+    };
+  }
+
+  // Tidak menambahkan properti lain seperti `src`
   return next;
 }

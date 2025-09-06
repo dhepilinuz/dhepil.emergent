@@ -1,260 +1,272 @@
 // File: src/Launcher/LauncherConfigValidator.ts
-// Validasi & sanitasi config: tahan banting untuk null/undefined/tipe salah.
-// Semua blok optional di-fallback ke default aman tanpa bikin pipeline macet.
+// Validator schema v2 tanpa `any`. Semua input ditangani sebagai `unknown` lalu di-clamp.
+// Output kompatibel dengan tipe di LauncherConfigSchema.ts
 
-import {
+import type {
   LauncherConfigRoot,
+  BgLayer,
   LayerConfig,
-  L2Config,
-  L2AConfig,
+  Logic2Config,
+  Logic2AConfig,
   SpinConfig,
   OrbitConfig,
   ClockConfig,
-  BgLayer,
   EffectConfig,
 } from "./LauncherConfigSchema";
-import { DEFAULT_MAX_FPS, MIN_FPS } from "./LauncherHubTypes";
-import { DEFAULTS, DefaultL2, DefaultL2A, DefaultSpin, DefaultOrbit } from "./LauncherConfigDefaults";
-import { clamp, isFiniteNumber } from "./LauncherUtilMath";
+import { SCHEMA_VERSION } from "./LauncherConfigSchema";
 
 /* =========================
-   Small helpers (null-safe)
+   Helpers tipe & clamp
    ========================= */
-const isObj = (v: any): v is Record<string, any> => v != null && typeof v === "object" && !Array.isArray(v);
-const numOr = (v: any, fb: number) => (isFiniteNumber(v) ? (v as number) : fb);
-const boolOr = (v: any, fb: boolean) => (typeof v === "boolean" ? v : fb);
-const strOr = (v: any, fb: string) => (typeof v === "string" ? v : fb);
+type Dict = Record<string, unknown>;
+const isObj = (v: unknown): v is Dict => !!v && typeof v === "object" && !Array.isArray(v);
 
-const clampPct100 = (v: number) => clamp(v, 0, 100);
-const clampPct200 = (v: number) => clamp(v, -200, 200);
-const clampPosPct = (v: number) => clamp(v, 1, 400);
-const clampOpacity = (v: number) => clamp(v, 0, 100);
-const clampZ = (v: number) => clamp(v, 0, 100);
-const clampZBg = (v: number) => clamp(v, 0, 10);
-const clampFps = (v: number) => clamp(Math.round(v), MIN_FPS, DEFAULT_MAX_FPS);
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+const bool = (v: unknown, d = false) => (typeof v === "boolean" ? v : d);
+const str = (v: unknown, d = "") => (typeof v === "string" ? v : d);
+
+function pickEnum<T extends string>(v: unknown, allowed: readonly T[], d: T): T {
+  const s = str(v, d) as T;
+  return (allowed as readonly string[]).includes(s) ? s : d;
+}
+
+function pct(v: unknown, d = 0, lo = 0, hi = 100) {
+  return clamp(num(v, d), lo, hi);
+}
+
+function pointPct100(v: unknown, dX = 50, dY = 50) {
+  const o = isObj(v) ? v : {};
+  return { xPct: pct(o["xPct"], dX, 0, 100), yPct: pct(o["yPct"], dY, 0, 100) };
+}
+
+function pointExtPct(v: unknown, dX = 0, dY = 0) {
+  const o = isObj(v) ? v : {};
+  return { xPct: clamp(num(o["xPct"], dX), -200, 200), yPct: clamp(num(o["yPct"], dY), -200, 200) };
+}
 
 /* =========================
-   Backgrounds
+   Background
    ========================= */
-function validateBackground(x: any): BgLayer {
+function validateBackground(x: unknown): BgLayer {
   const b = isObj(x) ? x : {};
-  const fit = b.fit === "cover" || b.fit === "fill" || b.fit === "none" ? b.fit : "contain";
+  const fit = (() => {
+    const v = str(b["fit"], "contain");
+    return v === "contain" || v === "cover" || v === "fill" || v === "none" ? v : "contain";
+  })();
+
   return {
-    id: strOr(b.id, "BG"),
-    src: strOr(b.src, ""),
-    xPct: clampPct100(numOr(b.xPct, 50)),
-    yPct: clampPct100(numOr(b.yPct, 50)),
-    scalePct: clampPosPct(numOr(b.scalePct, 100)),
-    opacityPct: clampOpacity(numOr(b.opacityPct, 100)),
-    z: clampZBg(numOr(b.z, 0)),
+    id: str(b["id"], "BG"),
+    src: str(b["src"], ""),
+    xPct: pct(b["xPct"], 50),
+    yPct: pct(b["yPct"], 50),
+    scalePct: pct(b["scalePct"], 100, 1, 400),
+    opacityPct: pct(b["opacityPct"], 100, 0, 100),
+    z: num(b["z"], 0),
     fit,
   };
 }
 
 /* =========================
-   Logic blocks
+   Block: L2
    ========================= */
-function validateL2(x: any): L2Config {
-  const l = isObj(x) ? x : {};
-  const centerMode: L2Config["centerMode"] = l.centerMode === "extendedPct" ? "extendedPct" : "pct100";
-  const c = isObj(l.center) ? l.center : {};
-  const center =
-    centerMode === "extendedPct"
-      ? { xPct: clampPct200(numOr(c.xPct, 0)), yPct: clampPct200(numOr(c.yPct, 0)) }
-      : { xPct: clampPct100(numOr(c.xPct, 50)), yPct: clampPct100(numOr(c.yPct, 50)) };
+function validateL2(x: unknown): Logic2Config {
+  const o = isObj(x) ? x : {};
+  const clampMode = pickEnum(o["clampMode"], ["none", "bounds"] as const, "none");
+  const centerMode = pickEnum(o["centerMode"], ["pct100", "extendedPct"] as const, "pct100");
 
-  const clampMode: L2Config["clampMode"] = l.clampMode === "bounds" ? "bounds" : "none";
-
-  const v: L2Config = {
-    enabled: boolOr(l.enabled, DefaultL2.enabled),
+  return {
+    enabled: bool(o["enabled"], false),
     clampMode,
     centerMode,
-    center,
-    scalePct: clampPosPct(numOr(l.scalePct, DefaultL2.scalePct)),
-    minScalePct: clampPosPct(numOr(l.minScalePct, DefaultL2.minScalePct)),
-    maxScalePct: clampPosPct(numOr(l.maxScalePct, DefaultL2.maxScalePct)),
-    marginPct: clampPct100(numOr(l.marginPct, DefaultL2.marginPct)),
-    rounding: l.rounding === "floor" || l.rounding === "ceil" ? l.rounding : "round",
+    center:
+      centerMode === "pct100"
+        ? pointPct100(o["center"], 50, 50)
+        : pointExtPct(o["center"], 0, 0),
+    scalePct: pct(o["scalePct"], 100, 1, 400),
+    minScalePct: pct(o["minScalePct"], 1, 1, 400),
+    maxScalePct: pct(o["maxScalePct"], 400, 1, 400),
+    marginPct: pct(o["marginPct"], 5, 0, 50),
+    rounding: pickEnum(o["rounding"], ["round", "floor", "ceil"] as const, "round"),
   };
-  if (v.minScalePct > v.maxScalePct) {
-    const t = v.minScalePct;
-    v.minScalePct = v.maxScalePct;
-    v.maxScalePct = t;
-    console.warn("[cfg] l2.minScalePct > maxScalePct; swapped.");
-  }
-  return v;
 }
 
-function validateL2A(x: any | undefined): L2AConfig | undefined {
-  if (!x) return undefined;
-  const l = isObj(x) ? x : {};
-  const base = isObj(l.base) ? l.base : {};
-  const tip = isObj(l.tip) ? l.tip : {};
-  const pivot: L2AConfig["pivot"] = l.pivot === "base" ? "base" : "center";
-  const align: L2AConfig["align"] = l.align === "axis" ? "axis" : "vertical";
+/* =========================
+   Block: L2A
+   ========================= */
+function validateL2A(x: unknown): Logic2AConfig {
+  const o = isObj(x) ? x : {};
   return {
-    enabled: boolOr(l.enabled, false),
+    enabled: bool(o["enabled"], false),
     rotationMode: "anchored",
-    base: { xPct: clampPct200(numOr(base.xPct, DefaultL2A.base.xPct)), yPct: clampPct200(numOr(base.yPct, DefaultL2A.base.yPct)) },
-    tip: { xPct: clampPct200(numOr(tip.xPct, DefaultL2A.tip.xPct)), yPct: clampPct200(numOr(tip.yPct, DefaultL2A.tip.yPct)) },
-    pivot,
-    align,
+    base: pointExtPct(o["base"], 0, 50),
+    tip: pointExtPct(o["tip"], 0, -50),
+    pivot: pickEnum(o["pivot"], ["center", "base"] as const, "center"),
+    align: pickEnum(o["align"], ["vertical", "axis"] as const, "vertical"),
   };
 }
 
-function validateSpin(x: any | undefined): SpinConfig | undefined {
-  if (!x) return undefined;
-  const s = isObj(x) ? x : {};
-  const pivotSource: SpinConfig["pivotSource"] =
-    s.pivotSource === "logic2A-base" ? "logic2A-base" : "logic2-center";
+/* =========================
+   Block: Spin (Logic-3)
+   ========================= */
+function validateSpin(x: unknown): SpinConfig {
+  const o = isObj(x) ? x : {};
   return {
-    enabled: boolOr(s.enabled, false),
-    rpm: Math.max(0, numOr(s.rpm, DefaultSpin.rpm)),
-    direction: s.direction === "ccw" ? "ccw" : "cw",
-    maxFps: clampFps(numOr(s.maxFps, DefaultSpin.maxFps)),
-    easing: "linear",
-    pivotSource,
+    enabled: bool(o["enabled"], false),
+    rpm: clamp(num(o["rpm"], num(o["fullSpinPerMinute"], 0)), 0, 120),
+    direction: pickEnum(o["direction"], ["cw", "ccw"] as const, "cw"),
+    maxFps: clamp(num(o["maxFps"], 60), 15, 60),
+    easing: pickEnum(o["easing"], ["linear", "thick", "smooth"] as const, "linear"),
+    pivotSource: pickEnum(o["pivotSource"], ["logic2-center", "logic2A-base"] as const, "logic2-center"),
   };
 }
 
-function validateOrbit(x: any | undefined): OrbitConfig | undefined {
-  if (!x) return undefined;
+/* =========================
+   Block: Orbit (Logic-3A)
+   ========================= */
+function validateOrbit(x: unknown): OrbitConfig {
   const o = isObj(x) ? x : {};
 
   // orbitPoint
-  let orbitPoint: OrbitConfig["orbitPoint"] = "dotmark";
-  if (o.orbitPoint === "dotmark") orbitPoint = "dotmark";
-  else if (isObj(o.orbitPoint) && isFiniteNumber(o.orbitPoint.xPct) && isFiniteNumber(o.orbitPoint.yPct)) {
-    orbitPoint = { xPct: clampPct100(o.orbitPoint.xPct), yPct: clampPct100(o.orbitPoint.yPct) };
-  }
+  const opRaw = o["orbitPoint"];
+  const orbitPoint =
+    opRaw === "dotmark"
+      ? "dotmark"
+      : isObj(opRaw)
+      ? pointPct100(opRaw, 50, 50)
+      : "dotmark";
 
   // line
+  const lineRaw = o["line"] ?? o["orbitLineSource"];
   let line: OrbitConfig["line"] = "none";
-  if (o.line === "none" || o.line === "center" || o.line === "base" || o.line === "tip") {
-    line = o.line;
-  } else if (isObj(o.line) && isFiniteNumber(o.line.xPct) && isFiniteNumber(o.line.yPct)) {
-    line = { xPct: clampPct100(o.line.xPct), yPct: clampPct100(o.line.yPct) };
+  if (typeof lineRaw === "string") {
+    const v = lineRaw as string;
+    line = v === "none" || v === "center" || v === "base" || v === "tip" ? (v as any) : "none";
+  } else if (isObj(lineRaw)) {
+    line = pointPct100(lineRaw, 50, 50);
   }
 
-  const startPhase: OrbitConfig["startPhase"] =
-    o.startPhase === "auto" || !isFiniteNumber(o.startPhase) ? "auto" : ((o.startPhase as number) % 360);
+  // startPhase
+  const spRaw = o["startPhase"];
+  const startPhase = typeof spRaw === "number" ? spRaw : "auto";
 
   return {
-    enabled: boolOr(o.enabled, false),
-    rpm: Math.max(0, numOr(o.rpm, DefaultOrbit.rpm)),
-    direction: o.direction === "ccw" ? "ccw" : "cw",
-    radiusPct: Math.max(0, numOr(o.radiusPct, DefaultOrbit.radiusPct)),
+    enabled: bool(o["enabled"], false),
+    rpm: clamp(num(o["rpm"], num(o["fullOrbitPerMinute"], 0)), 0, 60),
+    direction: pickEnum(o["direction"], ["cw", "ccw"] as const, "cw"),
+    radiusPct: pct(o["radiusPct"], 0, 0, 100),
     orbitPoint,
     line,
     startPhase,
-    maxFps: clampFps(numOr(o.maxFps, DefaultOrbit.maxFps)),
-    showLine: boolOr(o.showLine, false),
+    maxFps: clamp(num(o["maxFps"], 60), 15, 60),
+    showLine: bool(o["showLine"], false),
   };
 }
 
-function validateClock(x: any | undefined): ClockConfig | undefined {
-  if (!x) return undefined;
-  const c = isObj(x) ? x : {};
-  const sync: ClockConfig["sync"] = c.sync === "utc" ? "utc" : "device";
-  let utc: number | undefined = undefined;
-  if (sync === "utc") {
-    utc = isFiniteNumber(c.utcOffsetMinutes) ? (c.utcOffsetMinutes as number) : 0;
-    if (!isFiniteNumber(c.utcOffsetMinutes)) {
-      console.warn("[cfg] clock.sync='utc' but utcOffsetMinutes missing. Fallback 0.");
-    }
-  }
-  const role: ClockConfig["role"] = c.role === "hour" || c.role === "second" ? c.role : "minute";
-  const secondMode: ClockConfig["secondMode"] = role === "second" && c.secondMode === "tick" ? "tick" : "smooth";
-  const hourStyle: ClockConfig["hourStyle"] = c.hourStyle === 24 ? 24 : 12;
-  const offsetDeg = clamp(numOr(c.offsetDeg, 0), -180, 180);
+/* =========================
+   Block: Clock
+   ========================= */
+function validateClock(x: unknown): ClockConfig {
+  const o = isObj(x) ? x : {};
+  const sync = pickEnum(o["sync"], ["device", "utc"] as const, "device");
+  const role = pickEnum(o["role"], ["hour", "minute", "second"] as const, "minute");
+  const secondMode = pickEnum(o["secondMode"], ["smooth", "tick"] as const, "smooth");
+  const hourStyle = ((): 12 | 24 => {
+    const n = num(o["hourStyle"], 12);
+    return n === 24 ? 24 : 12;
+  })();
 
   return {
-    enabled: boolOr(c.enabled, false),
+    enabled: bool(o["enabled"], false),
     sync,
-    utcOffsetMinutes: utc,
+    utcOffsetMinutes: sync === "utc" ? num(o["utcOffsetMinutes"], 0) : undefined,
     role,
     secondMode,
     hourStyle,
-    offsetDeg,
+    offsetDeg: clamp(num(o["offsetDeg"], 0), -180, 180),
   };
 }
 
-function validateEffect(x: any | undefined): EffectConfig | undefined {
-  if (!x) return undefined;
-  const e = isObj(x) ? x : {};
-  const visibility: EffectConfig["visibility"] = e.visibility === "hidden" ? "hidden" : "visible";
-  const blend = strOr(e.blend, "normal") as EffectConfig["blend"];
+/* =========================
+   Block: Effect
+   ========================= */
+function validateEffect(x: unknown): EffectConfig {
+  const o = isObj(x) ? x : {};
+  const visibility = pickEnum(o["visibility"], ["visible", "hidden"] as const, "visible");
+  const blend = pickEnum(
+    o["blend"],
+    [
+      "normal",
+      "multiply",
+      "screen",
+      "overlay",
+      "darken",
+      "lighten",
+      "color-dodge",
+      "color-burn",
+      "difference",
+      "exclusion",
+      "hue",
+      "saturation",
+      "color",
+      "luminosity",
+    ] as const,
+    "normal"
+  );
+
   return {
-    enabled: boolOr(e.enabled, false),
+    enabled: bool(o["enabled"], false),
     visibility,
-    opacityPct: clampOpacity(numOr(e.opacityPct, 100)),
+    opacityPct: pct(o["opacityPct"], 100, 0, 100),
     blend,
-    blurPx: Math.max(0, numOr(e.blurPx, 0)),
-    brightnessPct: clampPct100(numOr(e.brightnessPct, 100)),
-    contrastPct: clampPct100(numOr(e.contrastPct, 100)),
-    saturatePct: clampPct100(numOr(e.saturatePct, 100)),
-    grayscalePct: clampPct100(numOr(e.grayscalePct, 0)),
-    hueRotateDeg: clamp(numOr(e.hueRotateDeg, 0), 0, 360),
+    blurPx: clamp(num(o["blurPx"], 0), 0, 100),
+    brightnessPct: pct(o["brightnessPct"], 100, 0, 200),
+    contrastPct: pct(o["contrastPct"], 100, 0, 200),
+    saturatePct: pct(o["saturatePct"], 100, 0, 200),
+    grayscalePct: pct(o["grayscalePct"], 0, 0, 100),
+    hueRotateDeg: clamp(num(o["hueRotateDeg"], 0), -180, 180),
   };
 }
 
 /* =========================
-   Layer wrapper
+   Layer
    ========================= */
-function validateLayer(raw: any, index: number): LayerConfig {
-  const r = isObj(raw) ? raw : {};
-  const id = strOr(r.id, `layer-${index}`);
-  const path = strOr(r.path, "");
-  const enabled = !!path && boolOr(r.enabled, true);
-  const zHint = clampZ(numOr(r.zHint, 0));
+function validateLayer(x: unknown): LayerConfig {
+  const o = isObj(x) ? x : {};
+  const l2 = validateL2(o["l2"]);
+  const l2a = validateL2A(o["l2a"]);
+  const spin = validateSpin(o["spin"]);
+  const orbit = validateOrbit(o["orbit"]);
+  const clock = validateClock(o["clock"]);
+  const effect = validateEffect(o["effect"]);
 
-  const l2 = validateL2(r.l2 ?? DefaultL2);
-  const l2a = validateL2A(r.l2a);
-  const spin = validateSpin(r.spin);
-  const orbit = validateOrbit(r.orbit);
-  const clock = validateClock(r.clock);
-  const effect = validateEffect(r.effect);
-
-  if ((spin?.enabled || orbit?.enabled || clock?.enabled) && l2.clampMode !== "none") {
-    console.warn(`[cfg] Layer "${id}": animations enabled but l2.clampMode != "none" (potensi jitter).`);
-  }
-
-  return { id, path, enabled, zHint, l2, l2a, spin, orbit, clock, effect };
+  return {
+    id: str(o["id"], "layer"),
+    path: str(o["path"], ""),
+    enabled: bool(o["enabled"], true),
+    zHint: num(o["zHint"], 0),
+    l2,
+    l2a,
+    spin,
+    orbit,
+    clock,
+    effect,
+  };
 }
 
 /* =========================
-   Entry point
+   Root
    ========================= */
-export function validateConfig(root: any): LauncherConfigRoot {
-  const schemaVersion = strOr(root?.schemaVersion, "2.0.0");
-  const meta = isObj(root?.meta) ? root.meta : {};
-  const backgroundsRaw = Array.isArray(root?.backgrounds) ? root.backgrounds : [];
-  const layersRaw = Array.isArray(root?.layers) ? root.layers : [];
-
-  const backgrounds = backgroundsRaw.map(validateBackground);
-
-  // de-duplicate layer ids (soft)
-  const seen = new Set<string>();
-  const layers = layersRaw.map((l: any, i: number) => {
-    let sane = validateLayer(l, i);
-    if (seen.has(sane.id)) {
-      const newId = `${sane.id}.${i}`;
-      console.warn(`[cfg] Duplicate layer id "${sane.id}" → renamed to "${newId}".`);
-      sane = { ...sane, id: newId };
-    }
-    seen.add(sane.id);
-    return sane;
-  });
+export function validateConfig(input: unknown): LauncherConfigRoot {
+  const o = isObj(input) ? input : {};
+  const backgrounds = Array.isArray(o["backgrounds"]) ? (o["backgrounds"] as unknown[]).map(validateBackground) : [];
+  const layers = Array.isArray(o["layers"]) ? (o["layers"] as unknown[]).map(validateLayer) : [];
 
   return {
-    schemaVersion,
-    meta: {
-      app: strOr(meta.app, "Launcher"),
-      build: strOr(meta.build, new Date().toISOString()),
-      author: meta.author ? strOr(meta.author, "") : undefined,
-    },
+    schemaVersion: str(o["schemaVersion"], SCHEMA_VERSION),
+    meta: isObj(o["meta"]) ? { app: str(o["meta"]!["app"], "Launcher"), build: str(o["meta"]!["build"], new Date().toISOString()) } : { app: "Launcher", build: new Date().toISOString() },
     backgrounds,
     layers,
-    defaults: root?.defaults ? { ...DEFAULTS, ...root.defaults } : DEFAULTS,
+    defaults: isObj(o["defaults"]) ? (o["defaults"] as Dict) : {},
   };
 }

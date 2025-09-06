@@ -1,35 +1,18 @@
 // File: src/Launcher/LauncherLogic1LayerProducer.ts
-// Rumah 1: Layer Producer. Inisialisasi bus per-layer dari config.
-// Hasil: bus.layer terisi (id, index, cfg) dan bus.image.src diset.
+// Rumah-1: Produce objek Bus awal dari LayerConfig. Tidak nambah field liar.
+// Siapkan image stub; natural akan diperbarui di Rumah-3.
 
 import type { Bus, LayerConfig } from "./LauncherHubTypes";
 
-export function logic1LayerProducer(
-  prev: Bus | undefined,
-  layer: LayerConfig,
-  index: number
-): Bus {
-  const base: Bus = prev ? { ...prev } : {};
-
-  // Catat meta layer
-  base.layer = {
+export function logic1LayerProducer(_bus: Bus | undefined, layer: LayerConfig, _index: number): Bus {
+  const next: Bus = {
     id: layer.id,
-    index,
+    path: layer.path || "",
+    enabled: !!layer.enabled,
+    zHint: layer.zHint || 0,
     cfg: layer,
+    // stub image: natural akan diisi oleh Rumah-3 dari ctx.natural
+    image: { natural: { w: 0, h: 0 }, localSpace: "image-centered" },
   };
-
-  // Siapkan info image minimal (natural size akan diisi di rumah 3 dari ctx)
-  base.image = {
-    ...(base.image ?? {}),
-    src: layer.path,
-  };
-
-  // Bersih-bersih hasil rumah berikutnya biar gak bawa sisa frame lama
-  base.pos = undefined;
-  base.angle = undefined;
-  base.spin = undefined;
-  base.orbit = undefined;
-  base.clock = undefined;
-
-  return base;
+  return next;
 }
