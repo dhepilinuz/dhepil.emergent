@@ -1,28 +1,35 @@
 // File: src/Launcher/LauncherLogic1LayerProducer.ts
-// Rumah 1: Layer Producer
-// Normalisasi 1 layer dari config → isi bus.layer. Pure, tanpa state & React.
+// Rumah 1: Layer Producer. Inisialisasi bus per-layer dari config.
+// Hasil: bus.layer terisi (id, index, cfg) dan bus.image.src diset.
 
 import type { Bus, LayerConfig } from "./LauncherHubTypes";
 
-/** Jalankan Rumah-1 untuk 1 layer. */
-export function logic1LayerProducer(prev: Bus | undefined, layerCfg: LayerConfig, index: number): Bus {
-  const enabled = !!layerCfg.enabled && !!layerCfg.path;
+export function logic1LayerProducer(
+  prev: Bus | undefined,
+  layer: LayerConfig,
+  index: number
+): Bus {
+  const base: Bus = prev ? { ...prev } : {};
 
-  const bus: Bus = {
-    ...(prev ?? {}),
-    layer: {
-      id: String(layerCfg.id || `layer-${index}`),
-      path: String(layerCfg.path || ""),
-      enabled,
-      zHint: Number.isFinite(layerCfg.zHint) ? (layerCfg.zHint as number) : 0,
-      cfg: layerCfg, // diasumsikan sudah lewat Validator
-    },
+  // Catat meta layer
+  base.layer = {
+    id: layer.id,
+    index,
+    cfg: layer,
   };
 
-  return bus;
-}
+  // Siapkan info image minimal (natural size akan diisi di rumah 3 dari ctx)
+  base.image = {
+    ...(base.image ?? {}),
+    src: layer.path,
+  };
 
-/** Bantuan: apakah layer siap dirender (sekadar flag awal). */
-export function isLayerEnabled(bus: Bus | undefined): boolean {
-  return !!bus?.layer?.enabled && !!bus?.layer?.path;
+  // Bersih-bersih hasil rumah berikutnya biar gak bawa sisa frame lama
+  base.pos = undefined;
+  base.angle = undefined;
+  base.spin = undefined;
+  base.orbit = undefined;
+  base.clock = undefined;
+
+  return base;
 }

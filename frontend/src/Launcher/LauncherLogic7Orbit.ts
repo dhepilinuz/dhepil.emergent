@@ -1,16 +1,7 @@
 // File: src/Launcher/LauncherLogic7Orbit.ts
-// Rumah 7: Orbit (Logic-3A). Pure, tanpa React/state di dalam rumah.
-// Input: nowMs, cfg.orbit, OrbitToken (dipegang Hub), serta posisi green/blue (via helper Hub).
-// Output: bus.orbit { dx, dy } (px, untuk translate3d).
-//
-// Catatan orientasi:
-// - Sudut 0° mengarah ke kanan, 90° ke bawah (koordinat layar y+ = bawah).
-// - Arah "cw" memperbesar sudut (searah jarum jam), "ccw" memperkecil.
-// - Token (rPx, theta0Deg, t0Ms, validBlue) dikelola HUB. Rumah ini hanya menghitung offset.
+// Rumah 7: Orbit (Logic-3A). Pure.
 
-import type {
-  Bus, FrameCtx, LayerConfig, OrbitToken, Point, PointPct,
-} from "./LauncherHubTypes";
+import type { Bus, FrameCtx, LayerConfig, OrbitToken, Point } from "./LauncherHubTypes";
 import { ORBIT_EPS } from "./LauncherHubTypes";
 import { norm360, toDeg, dist, polarToCartesian, clamp } from "./LauncherUtilMath";
 
@@ -34,13 +25,12 @@ export function orbitAngleDeg(nowMs: number, cfg: LayerConfig["orbit"] | undefin
 }
 
 /* ==============================
-   Resolver titik green/blue (helper untuk Hub)
+   Resolver titik green/blue
    ============================== */
-export function resolveGreenPx(orbt: NonNullable<LayerConfig["orbit"]>, ctx: FrameCtx, bus: Bus): Point {
+export function resolveGreenPx(orbt: NonNullable<LayerConfig["orbit"]>, ctx: FrameCtx): Point {
   const { origin, units } = ctx;
   const op = orbt.orbitPoint;
   if (op === "dotmark") return { x: origin.centerX, y: origin.centerY };
-  // object pct100
   const p = units.screenPct100ToPx(clamp(op.xPct, 0, 100), clamp(op.yPct, 0, 100), origin);
   return { x: p.x, y: p.y };
 }
@@ -61,7 +51,6 @@ export function resolveBluePx(orbt: NonNullable<LayerConfig["orbit"]>, ctx: Fram
     const t = bus.angle?.tipPx;
     return t ? { x: t.x, y: t.y } : null;
   }
-  // object pct100
   const p = units.screenPct100ToPx(clamp(ln.xPct, 0, 100), clamp(ln.yPct, 0, 100), origin);
   return { x: p.x, y: p.y };
 }
@@ -72,41 +61,36 @@ export function isInsideViewport(pt: Point | null | undefined, origin: FrameCtx[
 }
 
 /* ==============================
-   Derive OrbitToken inputs (helper untuk Hub)
-   - Hitung rPx & theta0Deg dari green & blue jika valid.
-   - Jika blue invalid/di luar layar/terlalu dekat → fallback radiusPct & startPhase.
+   Derive OrbitToken inputs
    ============================== */
 export function deriveOrbitInitParams(
   ctx: FrameCtx,
   bus: Bus,
   orbt: NonNullable<LayerConfig["orbit"]>
 ): { rPx: number; theta0Deg: number; validBlue: boolean } {
-  const green = resolveGreenPx(orbt, ctx, bus);
+  const green = resolveGreenPx(orbt, ctx);
   const blue = resolveBluePx(orbt, ctx, bus);
 
   if (blue && isInsideViewport(blue, ctx.origin)) {
     const r = dist(green.x, green.y, blue.x, blue.y);
     if (r > ORBIT_EPS) {
-      // Sudut awal: dari green ke blue, 0=kanan, 90=bawah
       const theta0Deg = norm360(toDeg(Math.atan2(blue.y - green.y, blue.x - green.x)));
       return { rPx: r, theta0Deg, validBlue: true };
     }
   }
 
-  // Fallback: radiusPct → px; theta dari startPhase (angka) atau 0
   const rPx = Math.max(0, ctx.units.vminPctToPx(Math.max(0, orbt.radiusPct || 0), ctx.origin));
   const theta0Deg = typeof orbt.startPhase === "number" ? norm360(orbt.startPhase) : 0;
   return { rPx, theta0Deg, validBlue: false };
 }
 
 /* ==============================
-   Token factory (helper untuk Hub)
+   Token factory
    ============================== */
 export function makeOrbitToken(nowMs: number, rPx: number, theta0Deg: number, validBlue: boolean): OrbitToken {
   return { rPx: Math.max(0, rPx), theta0Deg: norm360(theta0Deg), t0Ms: nowMs, validBlue: !!validBlue };
 }
 
-/** Kapan perlu rebase token orbit. */
 export function shouldRebaseOrbit(prevCfg?: LayerConfig["orbit"], nextCfg?: LayerConfig["orbit"]): boolean {
   const p = prevCfg, n = nextCfg;
   if (!!(p?.enabled) !== !!(n?.enabled)) return true;
@@ -130,9 +114,6 @@ export function logic7Orbit(prev: Bus | undefined, ctx: FrameCtx, token: OrbitTo
 
   const theta = orbitAngleDeg(ctx.nowMs, cfg, token);
   const { x, y } = polarToCartesian(token.rPx, theta); // 0°=kanan, 90°=bawah
-  const bus: Bus = {
-    ...(prev ?? {}),
-    orbit: { dx: x, dy: y },
-  };
+  const bus: Bus = { ...(prev ?? {}), orbit: { dx: x, dy: y } };
   return bus;
 }
