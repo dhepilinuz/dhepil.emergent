@@ -1,5 +1,5 @@
 [build]
-  command = "npm ci --platform=linux --arch=x64 && npm run build"
+  command = "npm ci && npm run build"
   publish = "dist"
 
 [dev]
